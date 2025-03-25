@@ -1,31 +1,27 @@
 services:
   backend:
-
+    image: ${IMAGE_BACKEND}
     restart: always
     env_file:
       - .env
-    environment:
-      # переменные окружения
-      APP_UVICORN: ${APP_UVICORN}
-      APP_PG: ${APP_PG}
     depends_on:
       - postgres
-    image: ${IMAGE_BACKEND}
     ports:
-      # вывести ли порты в материнскую систему
-      - ${PORTS_BACKEND_LINK}
+      - ${PORT_BACKEND:-8000}:${PORT_BACKEND:-8000}
+    volumes:
+      - ./uploads:/app/uploads
 
   postgres:
-    image: postgres:17.0
+    image: postgres:15.4
     env_file:
-      - .env
+      - .env.docker
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      PGDATA: ${PGDATA}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-events_db}
+      PGDATA: /var/lib/postgresql/data
     ports:
-      - ${PORTS_POSTGRES_LINK}
+      - ${PORT_POSTGRES:-5432}:5432
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/pg/:/var/lib/postgresql/data/

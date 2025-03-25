@@ -1,239 +1,140 @@
-from datetime import datetime, timedelta
-from uuid import uuid4
-from loguru import logger
-from typing import Optional, List, Dict
-from random import choice, randint, sample
+from datetime import datetime, date, timedelta
+from uuid import uuid4, UUID
+from typing import List, Dict, Any, Optional
 
-from services.hacker_service import HackerService
-from services.role_service import RoleService
-from services.team_service import TeamService
-from services.hackathon_service import HackathonService
-from services.winner_solution_service import WinnerSolutionService
-from persistent.db.role import RoleEnum
+from loguru import logger
+from sqlalchemy import select
+
+from persistent.database import get_session
+from services.event_service import EventService
+from services.coworking_service import CoworkingService
 
 
 class MockDataService:
+    """Service for creating mock data for testing."""
+    
     def __init__(self):
-        self.role_service = RoleService()
-        self.hacker_service = HackerService()
-        self.team_service = TeamService()
-        self.hackathon_service = HackathonService()
-        self.winner_solution_service = WinnerSolutionService()
-
-    async def initialize_mock_data(self):
-        """
-        Инициализирует тестовые данные в базе данных.
-        """
-        # Проверяем, нужно ли инициализировать данные
-        roles = await self.role_service.get_all_roles()
-        if len(roles) > 0:
-            logger.info("Mock data already initialized, skipping...")
-            return
-
+        self.event_service = EventService()
+        self.coworking_service = CoworkingService()
+        
+    async def initialize_mock_data(self) -> None:
+        """Initialize mock data for testing the application."""
         logger.info("Initializing mock data...")
         
-        # Инициализация ролей
-        logger.info("Initializing roles...")
-        await self.role_service.init_roles()
-        roles = await self.role_service.get_all_roles()
-        if not roles:
-            logger.error("Failed to initialize roles")
-            return
-        logger.info(f"Roles initialized: {len(roles)} roles created")
-        
-        # Логируем созданные роли
-        for role in roles:
-            logger.info(f"Role: {role.name}")
-
-        # Создаем множество хакеров с разными ролями
-        hackers = []
-        hacker_names = [
-            "John Doe", "Jane Smith", "Alex Johnson", "Maria Garcia", 
-            "Wei Chen", "Aisha Patel", "Carlos Rodriguez", "Olga Ivanova",
-            "Hiroshi Tanaka", "Fatima Ahmed", "Dmitry Petrov", "Sarah Wilson",
-            "Mohammed Ali", "Emma Brown", "Raj Kumar", "Sophia Martinez",
-            "Yuki Yamamoto", "Kwame Osei", "Natasha Romanov", "Miguel Hernandez"
-        ]
-        
-        logger.info("Creating multiple hackers with various roles...")
-        for name in hacker_names:
-            user_id = uuid4()
-            hacker_id = await self.hacker_service.upsert_hacker(user_id, name)
-            if hacker_id:
-                hackers.append(hacker_id)
-                logger.info(f"Hacker created: {name} with ID: {hacker_id}")
-                
-                # Назначаем случайные роли каждому хакеру
-                role_count = randint(1, 3)  # От 1 до 3 ролей на хакера
-                role_names = sample([r.name for r in roles], role_count)
-                role_ids = [role.id for role in roles if role.name in role_names]
-                
-                if role_ids:
-                    success = await self.hacker_service.update_hacker_roles(hacker_id, role_ids)
-                    if success:
-                        logger.info(f"Added roles to {name}: {role_names}")
-                    else:
-                        logger.error(f"Failed to add roles to {name}")
-            else:
-                logger.error(f"Failed to create hacker: {name}")
-        
-        if not hackers:
-            logger.error("Failed to create any hackers, aborting mock data initialization")
-            return
-        
-        # Создаем несколько команд с разными участниками
-        teams = []
-        team_names = [
-            "Elite Hackers", "Code Wizards", "Binary Bandits", "Syntax Savants",
-            "Algorithm Aces", "Data Dynamos", "Quantum Coders", "Pixel Pirates",
-            "Neural Ninjas", "Cloud Crusaders"
-        ]
-        
-        logger.info("Creating multiple teams...")
-        for team_name in team_names:
-            # Выбираем случайного владельца команды
-            owner_id = choice(hackers)
-            max_size = randint(3, 7)
+        # Check if we already have data to avoid duplication
+        async with get_session() as session:
+            # Check for events
+            event_count_query = select(1).limit(1)
+            event_result = await session.execute(event_count_query)
+            events_exist = event_result.scalar() is not None
             
-            try:
-                team_id, status = await self.team_service.create_team(
-                    owner_id=owner_id, 
-                    name=team_name, 
-                    max_size=max_size
-                )
-                
-                if status > 0:
-                    teams.append(team_id)
-                    logger.info(f"Team '{team_name}' created with ID: {team_id}, owner: {owner_id}")
-                    
-                    # Добавляем случайных участников в команду
-                    team_size = randint(2, max_size)
-                    potential_members = [h for h in hackers if h != owner_id]
-                    if potential_members and team_size > 1:
-                        members_to_add = sample(potential_members, min(team_size-1, len(potential_members)))
-                        for member_id in members_to_add:
-                            result, code = await self.team_service.add_hacker_to_team(team_id, member_id)
-                            if code > 0:
-                                logger.info(f"Added hacker {member_id} to team {team_name}")
-                            else:
-                                logger.warning(f"Failed to add hacker {member_id} to team {team_name}, code: {code}")
-                else:
-                    logger.error(f"Error creating team '{team_name}', status: {status}")
-            except Exception as e:
-                logger.error(f"Error creating team '{team_name}': {str(e)}")
+            # Check for coworking spaces
+            coworking_count_query = select(1).limit(1)
+            coworking_result = await session.execute(coworking_count_query)
+            coworking_exist = coworking_result.scalar() is not None
+            
+        if events_exist and coworking_exist:
+            logger.info("Mock data already exists, skipping initialization")
+            return
         
-        if not teams:
-            logger.error("Failed to create any teams, continuing with limited mock data")
+        await self._create_mock_events()
+        await self._create_mock_coworking_spaces()
         
-        # Создаем несколько хакатонов с разными параметрами
-        hackathons = []
-        hackathon_data = [
+        logger.info("Mock data initialization complete")
+    
+    async def _create_mock_events(self) -> None:
+        """Create mock events and organizers."""
+        events = [
             {
-                "name": "Global Hackathon 2024",
-                "task_description": "Solve real-world problems with innovative solutions.",
-                "start_date": "2024-01-01",
-                "duration_days": 21,
-                "amount_money": 10000.0,
-                "type": "offline"
+                "title": "Tech Conference 2023",
+                "description": "A three-day conference featuring the latest in technology trends, with workshops, keynotes, and networking opportunities. Join industry leaders and innovators as they discuss AI, blockchain, cloud computing, and more.",
+                "short_description": "Annual tech conference with workshops and keynotes",
+                "start_date": datetime.now() + timedelta(days=30),
+                "location": "Convention Center, Downtown",
+                "image_path": "/uploads/events/tech_conference.jpg",
+                "organizer_name": "TechEvents Inc.",
+                "organizer_description": "Leading technology event organizer",
+                "organizer_image_path": "/uploads/organizers/tech_events.png"
             },
             {
-                "name": "AI Revolution Challenge",
-                "task_description": "Create AI solutions for healthcare challenges.",
-                "start_date": "2024-02-15",
-                "duration_days": 14,
-                "amount_money": 15000.0,
-                "type": "online"
+                "title": "Web Development Workshop",
+                "description": "Learn modern web development techniques from industry experts. This hands-on workshop covers frontend frameworks, backend development, and deployment strategies. Perfect for beginners and intermediate developers looking to enhance their skills.",
+                "short_description": "Hands-on workshop for web developers",
+                "start_date": datetime.now() + timedelta(days=15),
+                "location": "Digital Academy, Tech District",
+                "image_path": "/uploads/events/web_dev_workshop.jpg",
+                "organizer_name": "Code Masters",
+                "organizer_description": "Coding education specialists",
+                "organizer_image_path": "/uploads/organizers/code_masters.png"
             },
             {
-                "name": "Sustainable Tech Hackathon",
-                "task_description": "Develop technologies to address climate change.",
-                "start_date": "2024-03-10",
-                "duration_days": 30,
-                "amount_money": 20000.0,
-                "type": "hybrid"
-            },
-            {
-                "name": "Fintech Innovation Cup",
-                "task_description": "Revolutionize financial services with cutting-edge technology.",
-                "start_date": "2024-04-05",
-                "duration_days": 10,
-                "amount_money": 12500.0,
-                "type": "online"
-            },
-            {
-                "name": "Smart Cities Hackathon",
-                "task_description": "Build solutions for the cities of tomorrow.",
-                "start_date": "2024-05-20",
-                "duration_days": 15,
-                "amount_money": 18000.0,
-                "type": "offline"
+                "title": "Startup Pitch Night",
+                "description": "An exciting evening where promising startups present their business ideas to potential investors. Entrepreneurs will have 5 minutes to pitch, followed by Q&A. Networking session and refreshments provided after the presentations.",
+                "short_description": "Startups pitch to investors",
+                "start_date": datetime.now() + timedelta(days=7),
+                "location": "Innovation Hub, Financial District",
+                "image_path": "/uploads/events/pitch_night.jpg",
+                "organizer_name": "Venture Connect",
+                "organizer_description": "Connecting startups with investors",
+                "organizer_image_path": "/uploads/organizers/venture_connect.png"
             }
         ]
         
-        logger.info("Creating multiple hackathons...")
-        for hack_data in hackathon_data:
-            start_date = datetime.strptime(hack_data["start_date"], "%Y-%m-%d")
-            duration = hack_data["duration_days"]
+        for event_data in events:
+            await self.event_service.create_event(**event_data)
             
-            # Расчет дат для хакатона
-            start_of_registration = start_date
-            end_of_registration = start_date + timedelta(days=duration//3)
-            start_of_hack = end_of_registration + timedelta(days=2)
-            end_of_hack = start_of_hack + timedelta(days=duration//2)
+        logger.info(f"Created {len(events)} mock events")
+    
+    async def _create_mock_coworking_spaces(self) -> None:
+        """Create mock coworking spaces with sample bookings."""
+        coworking_spaces = [
+            {
+                "name": "Downtown Hub",
+                "description": "A modern coworking space in the heart of downtown, featuring high-speed internet, meeting rooms, and a coffee bar. Perfect for freelancers and small teams.",
+                "location": "123 Main Street, Downtown",
+                "image_path": "/uploads/coworking/downtown_hub.jpg"
+            },
+            {
+                "name": "Tech Village",
+                "description": "Collaborative workspace designed for tech startups and developers. Features dedicated desks, private offices, and a gaming lounge for relaxation.",
+                "location": "456 Innovation Avenue, Tech District",
+                "image_path": "/uploads/coworking/tech_village.jpg"
+            }
+        ]
+        
+        for space_data in coworking_spaces:
+            coworking_id = await self.coworking_service.create_coworking_space(**space_data)
             
-            try:
-                hackathon_id = await self.hackathon_service.upsert_hackathon(
-                    name=hack_data["name"],
-                    task_description=hack_data["task_description"],
-                    start_of_registration=start_of_registration,
-                    end_of_registration=end_of_registration,
-                    start_of_hack=start_of_hack,
-                    end_of_hack=end_of_hack,
-                    amount_money=hack_data["amount_money"],
-                    type=hack_data["type"],
-                )
-                
-                if hackathon_id:
-                    hackathons.append(hackathon_id)
-                    logger.info(f"Hackathon '{hack_data['name']}' created with ID: {hackathon_id}")
-                else:
-                    logger.error(f"Failed to create hackathon '{hack_data['name']}'")
-            except Exception as e:
-                logger.error(f"Error creating hackathon '{hack_data['name']}': {str(e)}")
+            # Create some bookings for this space
+            await self._create_mock_bookings(coworking_id)
+            
+        logger.info(f"Created {len(coworking_spaces)} mock coworking spaces with bookings")
+    
+    async def _create_mock_bookings(self, coworking_id: UUID) -> None:
+        """Create mock bookings for a coworking space."""
+        # Sample customer data
+        customers = [
+            {"name": "Alice Johnson", "phone": "+1234567890"},
+            {"name": "Bob Smith", "phone": "+9876543210"},
+            {"name": "Charlie Brown", "phone": "+5554443333"},
+            {"name": "Diana Prince", "phone": "+1112223334"}
+        ]
         
-        if not hackathons:
-            logger.error("Failed to create any hackathons, skipping winner solution creation")
-            return
-        
-        # Создаем решения хакатонов для разных команд
-        logger.info("Creating winner solutions for teams in hackathons...")
-        for i, hackathon_id in enumerate(hackathons):
-            # Выбираем случайные команды-победители для каждого хакатона
-            if teams:
-                winners_count = min(3, len(teams))  # До 3 победителей на хакатон
-                winning_teams = sample(teams, winners_count)
-                
-                for place, team_id in enumerate(winning_teams, 1):
-                    link_to_solution = f"https://github.com/team{team_id}/solution{hackathon_id}"
-                    link_to_presentation = f"https://slides.com/team{team_id}/presentation{hackathon_id}"
-                    win_money = float(hackathon_data[i % len(hackathon_data)]["amount_money"]) / place  # Призовые уменьшаются с местом
-                    can_share = place == 1  # Только первое место может делиться решением
+        # Create bookings for the next 14 days with random distribution
+        today = date.today()
+        for i in range(14):
+            booking_date = today + timedelta(days=i)
+            
+            # Create 1-3 bookings per day
+            booking_count = i % 3 + 1
+            for j in range(booking_count):
+                if j >= len(customers):
+                    continue
                     
-                    try:
-                        solution_id, success = await self.winner_solution_service.create_winner_solution(
-                            hackathon_id=hackathon_id,
-                            team_id=team_id,
-                            win_money=win_money,
-                            link_to_solution=link_to_solution,
-                            link_to_presentation=link_to_presentation,
-                            can_share=can_share,
-                        )
-                        
-                        if success and solution_id:
-                            logger.info(f"Winner solution created for team {team_id} in hackathon {hackathon_id}, place: {place}")
-                        else:
-                            logger.error(f"Failed to create winner solution for team {team_id} in hackathon {hackathon_id}")
-                    except Exception as e:
-                        logger.error(f"Error creating winner solution: {str(e)}")
-        
-        logger.info("Mock data initialization completed with multiple entities and relationships!")
+                customer = customers[j]
+                await self.coworking_service.create_booking(
+                    coworking_id=coworking_id,
+                    booking_date=booking_date,
+                    customer_name=customer["name"],
+                    customer_phone=customer["phone"]
+                ) 
